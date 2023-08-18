@@ -1,6 +1,8 @@
+import numpy as np
 import tensorflow as tf
 from typing import List, Union
-
+import warnings
+warnings.filterwarnings("ignore")
 from Recommendation.Utils.core import dnn_layer
 
 
@@ -50,14 +52,14 @@ class MIND:
         self.interest_capsules_dim = interest_capsules_dim
         self.mode = mode
 
-        self.user_tables = [tf.get_variable("user_table_" + str(i), shape=[size, user_emb_dim[i]]
+        self.user_tables = [tf.compat.v1.get_variable("user_table_" + str(i), shape=[size, user_emb_dim[i]]
                                             ) for i, size in enumerate(user_vocab_size)]
-        self.item_tables = [tf.get_variable("item_table_" + str(i), shape=[size, item_emb_dim[i]]
+        self.item_tables = [tf.compat.v1.get_variable("item_table_" + str(i), shape=[size, item_emb_dim[i]]
                                             ) for i, size in enumerate(item_vocab_size)]
 
         self.item_vocab_size = len(all_item_idx[0])
 
-        with tf.variable_scope("embedding_layer"):
+        with tf.compat.v1.variable_scope("embedding_layer"):
             # 用户向量的维度必须与item的向量维度相同
             if self.mode == 'mean':
                 assert all([item_emb_dim[i] == item_emb_dim[i+1] for i in range(len(item_emb_dim)-1)])
@@ -72,7 +74,7 @@ class MIND:
             else:
                 raise NotImplementedError(f"`mode` only supports 'mean' or 'concat', but got '{mode}'")
 
-        self.zero_bias = tf.get_variable("zero_bias", shape=[self.item_vocab_size], trainable=False)
+        self.zero_bias = tf.compat.v1.get_variable("zero_bias", shape=[self.item_vocab_size], trainable=False)
 
     def get_item_embedding(self):
         """
@@ -95,7 +97,7 @@ class MIND:
         :param training:
         :return:
         """
-        with tf.variable_scope("embedding_layer"):
+        with tf.compat.v1.variable_scope("embedding_layer"):
             behavior_item_embedding = [tf.nn.embedding_lookup(table, inputs) for table, inputs in zip(self.item_tables, behavior_item_inputs)]
             # [batch_size, max_seq_len, dim]
             if self.mode == 'mean':
@@ -107,11 +109,11 @@ class MIND:
             # [batch_size, dim*n]
             user_embedding = tf.concat(user_embedding, axis=-1)
 
-        with tf.variable_scope("multi_interest_extractor_layer"):
+        with tf.compat.v1.variable_scope("multi_interest_extractor_layer"):
             # [batch_size, k_max, dim]
             interest_capsules = self.capsule_network(behavior_item_embedding, self.k_max, seq_len)
 
-        with tf.variable_scope("relu_dnn_layer"):
+        with tf.compat.v1.variable_scope("relu_dnn_layer"):
             user_embedding = tf.expand_dims(user_embedding, axis=1)
             user_embedding = tf.tile(user_embedding, [1, self.k_max, 1])
 
@@ -127,14 +129,14 @@ class MIND:
         if not training:
             return user_vectors
 
-        with tf.variable_scope("embedding_layer"):
+        with tf.compat.v1.variable_scope("embedding_layer"):
             target_item_embedding = [tf.nn.embedding_lookup(table, inputs) for table, inputs in zip(self.item_tables, target_item_inputs)]
             if self.mode == 'mean':
                 target_item_embedding = sum(target_item_embedding) / len(target_item_embedding)
             else:
                 target_item_embedding = tf.concat(target_item_embedding, axis=-1)
 
-        with tf.variable_scope("label_aware_attention_layer"):
+        with tf.compat.v1.variable_scope("label_aware_attention_layer"):
             user_vectors, loss = self.label_aware_attention_layer(user_vectors, target_item_embedding, seq_len)
 
         return user_vectors, loss
@@ -149,7 +151,7 @@ class MIND:
             1.,
             tf.minimum(
                 tf.cast(self.k_max, dtype="float32"),
-                tf.log1p(tf.cast(seq_len, dtype="float32")) / tf.log(2.)
+                tf.math.log1p(tf.cast(seq_len, dtype="float32")) / tf.math.log(2.)
             )
         ), dtype="int64")
         seq_mask = tf.expand_dims(tf.sequence_mask(k_user, self.k_max), axis=-1)
@@ -178,13 +180,13 @@ class MIND:
         # item向量的维度dim
         dim = low_capsule.shape.as_list()[-1]
 
-        bilinear_mapping_matrix = tf.get_variable(name='bilinear_mapping_matrix',
+        bilinear_mapping_matrix = tf.compat.v1.get_variable(name='bilinear_mapping_matrix',
                                                   # shape=[dim, dim],
-                                                  initializer=tf.truncated_normal(shape=[dim, self.interest_capsules_dim]))
+                                                  initializer=tf.random.truncated_normal(shape=[dim, self.interest_capsules_dim]))
 
         # 高斯分布初设化
-        routing_logits = tf.get_variable(name='routing_logits',
-                                         initializer=tf.truncated_normal(shape=[1, k_max, max_seq_len]),
+        routing_logits = tf.compat.v1.get_variable(name='routing_logits',
+                                         initializer=tf.random.truncated_normal(shape=[1, k_max, max_seq_len]),
                                          trainable=False)
 
         low_capsule_mapping = tf.tensordot(low_capsule, bilinear_mapping_matrix, axes=1)
@@ -197,7 +199,7 @@ class MIND:
         for _ in range(3):
             routing_logits_with_padding = tf.where(mask, routing_logits, pad)
             w = tf.nn.softmax(routing_logits_with_padding)
-
+            print(w)
             candidate_vector = tf.matmul(w, low_capsule_mapping)
 
             high_capsule = self.squash(candidate_vector)
@@ -205,12 +207,12 @@ class MIND:
             delta_routing_logits = tf.reduce_sum(tf.matmul(high_capsule, low_capsule_mapping, transpose_b=True),
                                                  axis=0, keepdims=True)
 
-            routing_logits = tf.assign_add(routing_logits, delta_routing_logits)
+            routing_logits = tf.compat.v1.assign_add(routing_logits, delta_routing_logits)
 
         return high_capsule
 
     def squash(self, z):
-        z_l2 = tf.reduce_sum(tf.square(z), axis=-1, keep_dims=True)
+        z_l2 = tf.reduce_sum(tf.square(z), axis=-1, keepdims=True)
         z_l1 = tf.sqrt(z_l2 + 1e-8)
 
         return z / z_l1 * z_l2 / (1 + z_l2)
@@ -252,10 +254,10 @@ if __name__ == '__main__':
     #              mode='mean'
     #              )
     # batch输入
-    user_feat_inputs = [tf.placeholder(dtype=tf.int32, shape=[None]) for _ in range(3)]
-    behavior_item_inputs = [tf.placeholder(dtype=tf.int32, shape=[None, 20]) for _ in range(2)]
-    target_item_inputs = [tf.placeholder(dtype=tf.int32, shape=[None]) for _ in range(2)]
-    seq_len = tf.placeholder(dtype=tf.int32, shape=[None])
+    user_feat_inputs = [tf.compat.v1.placeholder(dtype=tf.int32, shape=[None]) for _ in range(3)]
+    behavior_item_inputs = [tf.compat.v1.placeholder(dtype=tf.int32, shape=[None, 20]) for _ in range(2)]
+    target_item_inputs = [tf.compat.v1.placeholder(dtype=tf.int32, shape=[None]) for _ in range(2)]
+    seq_len = tf.compat.v1.placeholder(dtype=tf.int32, shape=[None])
     training = True
     user_vectors, loss = model(user_feat_inputs,
                                behavior_item_inputs,
